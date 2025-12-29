@@ -1,11 +1,17 @@
 import requests
 import streamlit as st
-import time
 
-st.set_page_config(page_title="Ro-Metadata Deep Scanner", layout="wide")
-st.title("🎫 Ro-Deep Metadata Scanner (2025 Force-Start)")
+st.set_page_config(page_title="Ro-Outfit Deep Scanner", layout="wide")
+st.title("🎫 Ro-Outfit Deep Metadata Scanner")
 
 input_val = st.text_input("Enter Username or User ID", value="Builderman")
+
+BRICK_COLORS = {
+    1: "White", 5: "Brick yellow", 18: "Nougat (Skin)", 21: "Bright red", 
+    23: "Bright blue", 24: "Bright yellow", 26: "Black", 101: "Medium red", 
+    102: "Medium blue", 192: "Reddish brown", 1001: "Institutional White",
+    1010: "Really blue", 1022: "Pastel light blue"
+}
 
 def resolve_user_id(target):
     if target.isdigit(): return target
@@ -13,55 +19,67 @@ def resolve_user_id(target):
     res = requests.post(url, json={"usernames": [target]})
     return str(res.json()['data'][0]['id']) if res.status_code == 200 and res.json()['data'] else None
 
-def get_3d_metadata_forced(uid):
-    """Triggers the 3D engine and waits for completion."""
-    url = f"https://thumbnails.roblox.com/v1/users/avatar-3d?userId={uid}"
+def deep_scan_live(uid):
+    """Bypasses 'Private Outfits' by pulling the LIVE avatar data."""
+    url = f"https://avatar.roblox.com/v1/users/{uid}/avatar"
+    res = requests.get(url)
+    return res.json() if res.status_code == 200 else None
+
+def reveal_ui(data, uid, is_live=False):
+    st.divider()
+    st.header(f"🔍 METADATA REVEAL: {'LIVE AVATAR' if is_live else data.get('name')}")
     
-    # Attempt to fetch up to 5 times
-    for _ in range(5):
-        res = requests.get(url)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get('state') == "Completed":
-                # Success! Now fetch the actual JSON file
-                json_res = requests.get(data['imageUrl'])
-                return json_res.json()
-            elif data.get('state') == "Pending":
-                st.write("⏳ Render is Pending... Retrying in 1s...")
-                time.sleep(1)
-            else:
-                st.error(f"Error: 3D Engine returned state '{data.get('state')}'")
-                break
-    return None
+    # Render Logic
+    if is_live:
+        render_url = f"https://www.roblox.com/avatar-thumbnail/image?userId={uid}&width=420&height=420&format=png"
+    else:
+        render_url = f"https://www.roblox.com/outfit-thumbnail/image?userOutfitId={data.get('id')}&width=420&height=420&format=png"
+    
+    col_img, col1, col2 = st.columns([1.5, 2, 2])
+    with col_img:
+        st.image(render_url, caption="Extracted Render")
+    
+    with col1:
+        st.subheader("🧬 Physics & Animations")
+        scales = data.get('scales', {})
+        for k, v in scales.items():
+            st.write(f"- **{k.capitalize()}:** {int(v*100) if v <=2 else int(v)}%")
+            
+    with col2:
+        st.subheader("🎨 Skin Tones")
+        for limb, cid in data.get('bodyColors', {}).items():
+            name = BRICK_COLORS.get(cid, f"ID: {cid}")
+            st.write(f"- **{limb.replace('ColorId', '')}:** {name}")
+
+    st.subheader(f"🛠️ Asset Anatomy")
+    st.table([{"Type": a['assetType']['name'], "Name": a['name'], "ID": a['id']} for a in data.get('assets', [])])
 
 # --- EXECUTION ---
-if st.button("EXECUTE DEEP SCAN"):
+if st.button("FETCH USER"):
     uid = resolve_user_id(input_val)
     if uid:
-        st.info(f"Scanning User ID: {uid}...")
+        st.session_state['target_id'] = uid
+        # Standard Fetch
+        res = requests.get(f"https://avatar.roblox.com/v1/users/{uid}/outfits")
+        st.session_state['outfits'] = res.json().get('data', [])
         
-        # Pull Live Image
-        st.image(f"https://www.roblox.com/avatar-thumbnail/image?userId={uid}&width=420&height=420&format=png", width=250)
-        
-        # Pull 3D Data
-        deep_data = get_3d_metadata_forced(uid)
-        
-        if deep_data:
-            st.success("3D Metadata Successfully Extracted!")
-            
-            # Extract Textures (The real private data)
-            textures = deep_data.get('textures', [])
-            
-            if textures:
-                st.markdown(f"### 🛠️ Extracted Asset Textures ({len(textures)})")
-                st.info("These are the raw IDs used by the 3D engine. Even private items show up here.")
-                
-                for tid in textures:
-                    # We use the Library link because it bypasses Catalog 404s
-                    st.write(f"- Texture ID: `{tid}` — [View Raw Asset](https://www.roblox.com/library/{tid})")
-            else:
-                st.warning("No texture IDs found in the 3D stream. The user might be wearing a simple avatar with no custom assets.")
-        else:
-            st.error("Deep Scan Failed: The 3D Render timed out. Try again in 10 seconds.")
+        if not st.session_state['outfits']:
+            st.warning("⚠️ Saved Outfits are PRIVATE. Use 'DEEP SCAN' to bypass.")
     else:
         st.error("User not found.")
+
+if 'target_id' in st.session_state:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.session_state.get('outfits'):
+            opts = {f"{o['name']}": o['id'] for o in st.session_state['outfits']}
+            choice = st.selectbox("Public Outfits", options=list(opts.keys()))
+            if st.button("Reveal Outfit"):
+                details = requests.get(f"https://avatar.roblox.com/v1/outfits/{opts[choice]}/details").json()
+                reveal_ui(details, st.session_state['target_id'])
+    
+    with col_b:
+        if st.button("🚀 DEEP SCAN (Bypass Privacy)"):
+            live_data = deep_scan_live(st.session_state['target_id'])
+            if live_data:
+                reveal_ui(live_data, st.session_state['target_id'], is_live=True)
